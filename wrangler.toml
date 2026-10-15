@@ -1,0 +1,115 @@
+# ---- Cloudflare Worker: one app serves frontend + API ----
+name = "vidshare"
+main = "worker/index.js"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The static frontend. Anything that is a real file under frontend/ (/, /dashboard/, share.css,
+# config.js …) is served straight from Cloudflare's edge; the Worker only sees the API, media and
+# server-rendered share-page paths. /privacy is the one path where a static file exists but the
+# Worker's dynamic page (APP_NAME/SUPPORT_EMAIL from config) should win.
+assets = { directory = "frontend", binding = "ASSETS", run_worker_first = ["/privacy"] }
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "vidshare-files"   # the existing bucket with all videos/thumbnails (backend/.env → R2_BUCKET)
+
+[[d1_databases]]
+binding = "DB"
+database_name = "vidshare"
+database_id = "0b2c8bb9-db50-4cc2-b973-496228bc5b2b"
+migrations_dir = "api/migrations"
+
+# A stale-upload + expired-token sweep twice a day (worker/index.js `scheduled`).
+[triggers]
+crons = ["0 */6 * * *"]
+
+# ---- Non-secret config (the old .env keys minus the secrets) ----
+# Secrets are NOT here: SIGNING_SECRET, ADMIN_PASSWORD, API_KEY live in
+#   local : .dev.vars            (copy .dev.vars.example)
+#   live  : npx wrangler secret put <NAME>
+
+[vars]
+APP_NAME = "XIX Video Downloader"
+ADMIN_USERNAME = "admin"
+ADMIN_TOKEN_TTL_HOURS = "12"
+CHANNEL_NAME = "XIX Video Downloader"
+TIMEZONE = "Asia/Kolkata"
+# Your public domain, e.g. https://vidshare.in (no trailing slash). Empty = use the request's domain.
+PUBLIC_URL = ""
+SUPPORT_EMAIL = "support@XIXVideoDownload.com"
+
+# ---- Android App Links (must match the Android app) ----
+ANDROID_PACKAGE = "com.xixvideo.ultimatemedia.downloader"
+# SHA-256 of the app signing keys — add ANY number of keys, ONE PER LINE (commas also work).
+# Typical set: Play App Signing RELEASE key + UPLOAD key + debug key (for local testing).
+# Every line below becomes one entry of sha256_cert_fingerprints in /.well-known/assetlinks.json.
+ANDROID_SHA256 = """
+16:6B:6C:4C:E1:5D:A7:60:BF:01:50:F1:5D:3E:F3:A1:90:DC:65:3C:69:03:80:8B:3B:8F:A0:A1:74:F2:29:EF
+5F:76:64:BD:C8:4A:B1:E6:15:84:D5:91:DB:B2:3B:CE:7C:F9:62:72:82:A9:50:5F:EB:BB:DB:9A:CB:EF:40:D2
+"""
+
+# ---- iOS Universal Links (optional, leave empty if no iOS app) ----
+IOS_APP_ID = ""
+IOS_APP_STORE_URL = ""
+
+# ---- View counting ----
+MIN_WATCH_SECONDS = "10"
+MAX_VIEWS_PER_IP_DAY = "3"
+MAX_UPLOAD_MB = "4096"
+# The Worker streams bytes straight from R2 (no bucket link to expire any more), so this is only
+# how long a player may cache one byte-window response before asking for the next window.
+MEDIA_CACHE_SECONDS = "600"
+
+# ---- Android app remote config ----
+MIN_APP_VERSION = "1"
+ADS_ENABLED = "true"
+AD_BANNER_ID = "ca-app-pub-3940256099942544/9214589741"
+AD_INTERSTITIAL_ID = "ca-app-pub-3940256099942544/1033173712"
+TUTORIAL_YOUTUBE_ID = ""
+
+# ---- Web ads on the share page (single-line HTML) ----
+WEB_AD_HEAD = ""
+WEB_AD_TOP = ""
+WEB_AD_BOTTOM = ""
+
+# ---- Google Ad Manager (GPT): top + bottom inline banners + floating side panels ----
+# Current values are Google's public demo units (they serve real test creatives) so you can verify
+# end to end. Replace with YOUR OWN ad-unit paths from Ad Manager → Inventory → Ad units (each path
+# starts with your network code, e.g. "/123456789/vidshare/top-banner"). Leave a unit empty to disable it.
+# Sizes are per region (GAM_TOP_AD_SIZES / GAM_BOTTOM_AD_SIZES, falling back to GAM_AD_SIZES; a value
+# with no WxH like "fluid" = responsive). WEB_AD_TOP / WEB_AD_BOTTOM above override GAM for a region.
+GAM_TOP_AD_UNIT = "/23338698373/xixvideohub_display_top_01"
+GAM_BOTTOM_AD_UNIT = "/23338698373/xixvideohub_display_bottom_01"
+GAM_TOP_AD_SIZES = "300x250"
+GAM_BOTTOM_AD_SIZES = "300x250"
+# LEFT slide-in BANNER (replaces the old IMA video box, which never filled — no booked video inventory).
+# bannerSlider() renders this as a normal GPT Display slot in a card that glides in from the left,
+# rests bottom corner, glides out to the right and loops — on mobile AND desktop. Currently shares
+# the proven-fillable right-side unit path; for best results create a dedicated
+# xixvideohub_display_left_01 Display unit (300x250) in GAM and paste its path here. Empty = disabled.
+GAM_LEFT_AD_UNIT = "/23338698373/xixvideohub_display_left_01"
+GAM_LEFT_AD_SIZES = "300x250"
+# interstitialManager() calls googletag.defineOutOfPageSlot(unit, googletag.enums.OutOfPageFormat.
+# INTERSTITIAL) + addService + display() once — GPT builds, sizes, presents and closes its own
+# full-page container. No defineSlot, no display sizes, no size mapping for this unit, so the unit
+# below must be an INTERSTITIAL-type ad unit (a display-type unit is the wrong pairing).
+# GAM_INTERSTITIAL_DELAY_SEC = seconds after page load before the request goes out. The delay only
+# controls WHEN we request; Google still decides when it may reveal the creative (eligible user
+# action) and applies its own frequency cap (~1 impression / 10 min / subdomain).
+# Every failure path (GPT slow/missing, slot null, no fill, never revealed) releases the slot and
+# returns to IDLE — nothing is overlaid, scrolling is never locked, the page is never blocked, and a
+# later attempt can request again with a fresh slot. Empty unit = disabled.
+GAM_INTERSTITIAL_AD_UNIT = "/23338698373/xixvideohub_display_interstitial_01"
+GAM_INTERSTITIAL_DELAY_SEC = "20"
+# RIGHT floating panel = a display banner (slide-in box + close nub).
+GAM_RIGHT_AD_UNIT = "/23338698373/xixvideohub_display_right_01"
+GAM_RIGHT_AD_SIZES = "300x250"
+GAM_AD_SIZES = "300x250"
+# AUTO-REFRESH cadency for every repeating ad: the GPT display slots (top/bottom banners + right
+# floating panel) reload via pubads().refresh([...those slots only...]) every GAM_AD_REFRESH_SEC,
+# AND the left video ad box re-mounts a fresh IMA cycle after each cycle ends (new [TIMESTAMP]
+# correlator per request). Google policy minimum is 30s (lower is clamped to 30; 0 = no refresh).
+# The full-page interstitial is NEVER refreshed - it keeps its own one-shot GAM_INTERSTITIAL_DELAY_SEC
+# page-load timer.
+GAM_AD_REFRESH_SEC = "30"
